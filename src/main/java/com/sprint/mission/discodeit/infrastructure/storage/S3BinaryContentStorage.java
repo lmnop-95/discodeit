@@ -84,7 +84,7 @@ public class S3BinaryContentStorage implements BinaryContentStorage {
         try {
             String encodedFileName = URLEncoder.encode(fileName, StandardCharsets.UTF_8)
                 .replace("+", "%20");
-            String contentDisposition = "attachment; filename*=UTF-8''" + encodedFileName;
+            String contentDisposition = "inline; filename*=UTF-8''" + encodedFileName;
 
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .responseContentType(contentType)
