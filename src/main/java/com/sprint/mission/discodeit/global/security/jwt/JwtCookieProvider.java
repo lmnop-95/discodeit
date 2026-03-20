@@ -20,7 +20,7 @@ public class JwtCookieProvider {
     public Cookie createRefreshTokenCookie(String refreshToken) {
         Cookie cookie = new Cookie(refreshTokenCookieName, refreshToken);
         cookie.setHttpOnly(true);
-        cookie.setSecure(true);
+        cookie.setSecure(false);
         cookie.setPath("/");
         cookie.setMaxAge((int) refreshTokenExpiration.toSeconds());
         return cookie;
@@ -29,7 +29,7 @@ public class JwtCookieProvider {
     public Cookie createExpiredRefreshTokenCookie() {
         Cookie cookie = new Cookie(refreshTokenCookieName, "");
         cookie.setHttpOnly(true);
-        cookie.setSecure(true);
+        cookie.setSecure(false);
         cookie.setPath("/");
         cookie.setMaxAge(0);
         return cookie;
