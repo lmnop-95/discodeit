@@ -19,12 +19,12 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.net.URI;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -191,22 +191,23 @@ class BinaryContentControllerTest {
 
         @Test
         @WithMockUser
-        @DisplayName("존재하는 파일 다운로드 시 리다이렉트 응답")
-        void download_withExistingId_returnsRedirect() throws Exception {
+        @DisplayName("존재하는 파일 다운로드 시 파일 바이트 반환")
+        void download_withExistingId_returnsFileContent() throws Exception {
             // given
             BinaryContentDto dto = createTestDto(TEST_CONTENT_ID_1, "test.png");
-            String downloadUrl = "https://s3.example.com/bucket/test.png?presigned=token";
+            byte[] fileBytes = "fake image content".getBytes();
 
             given(binaryContentService.find(TEST_CONTENT_ID_1)).willReturn(dto);
             given(binaryContentStorage.download(dto))
-                .willReturn(ResponseEntity.status(302)
-                    .location(URI.create(downloadUrl))
-                    .build());
+                .willReturn(ResponseEntity.ok()
+                    .contentType(MediaType.IMAGE_PNG)
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"test.png\"")
+                    .body(fileBytes));
 
             // when & then
             mockMvc.perform(get("/api/binaryContents/{binaryContentId}/download", TEST_CONTENT_ID_1))
-                .andExpect(status().isFound())
-                .andExpect(header().string(HttpHeaders.LOCATION, downloadUrl));
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"test.png\""));
         }
 
         @Test

@@ -9,5 +9,5 @@ public interface BinaryContentStorage {
 
     UUID put(UUID binaryContentId, byte[] bytes);
 
-    ResponseEntity<Void> download(BinaryContentDto metaData);
+    ResponseEntity<byte[]> download(BinaryContentDto metaData);
 }

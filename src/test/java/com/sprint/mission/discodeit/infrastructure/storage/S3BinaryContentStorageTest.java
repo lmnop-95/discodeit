@@ -13,21 +13,19 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.presigner.S3Presigner;
-import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
-import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URL;
+import java.io.ByteArrayInputStream;
 import java.time.Duration;
 import java.util.UUID;
 
@@ -44,20 +42,16 @@ class S3BinaryContentStorageTest {
     @Mock
     private S3Client s3Client;
 
-    @Mock
-    private S3Presigner s3Presigner;
-
     private S3BinaryContentStorage storage;
 
     private static final String TEST_BUCKET = "test-bucket";
-    private static final Duration PRESIGNED_EXPIRATION = Duration.ofMinutes(10);
 
     @BeforeEach
     void setUp() {
         S3Properties s3Properties = new S3Properties(
-            "accessKey", "secretKey", "us-east-1", TEST_BUCKET, null, PRESIGNED_EXPIRATION
+            "accessKey", "secretKey", "us-east-1", TEST_BUCKET, null, Duration.ofMinutes(10)
         );
-        storage = new S3BinaryContentStorage(s3Client, s3Presigner, s3Properties);
+        storage = new S3BinaryContentStorage(s3Client, s3Properties);
     }
 
     @Nested
@@ -170,75 +164,59 @@ class S3BinaryContentStorageTest {
     class Download {
 
         @Test
-        @DisplayName("다운로드 요청 시 Presigned URL로 리다이렉트 응답 반환")
-        void download_returnsRedirectResponse() throws MalformedURLException {
+        @DisplayName("다운로드 요청 시 파일 바이트와 올바른 헤더 반환")
+        void download_returnsFileContent() {
             // given
             UUID contentId = UUID.randomUUID();
             BinaryContentDto metaData = new BinaryContentDto(
                 contentId, "test.png", 1024L, "image/png", BinaryContentStatus.SUCCESS
             );
 
-            URL presignedUrl = URI.create("https://s3.amazonaws.com/test-bucket/" + contentId).toURL();
-            PresignedGetObjectRequest presignedRequest = mockPresignedRequest(presignedUrl);
+            byte[] fileBytes = "fake image content".getBytes();
+            GetObjectResponse getObjectResponse = GetObjectResponse.builder().build();
+            ResponseInputStream<GetObjectResponse> responseStream =
+                new ResponseInputStream<>(getObjectResponse, new ByteArrayInputStream(fileBytes));
 
-            given(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class)))
-                .willReturn(presignedRequest);
+            given(s3Client.getObject(any(GetObjectRequest.class))).willReturn(responseStream);
 
             // when
-            ResponseEntity<Void> response = storage.download(metaData);
+            ResponseEntity<byte[]> response = storage.download(metaData);
 
             // then
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-            assertThat(response.getHeaders().get(HttpHeaders.LOCATION)).isNotNull();
+            assertThat(response.getStatusCodeValue()).isEqualTo(200);
+            assertThat(response.getBody()).isEqualTo(fileBytes);
+            assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_PNG);
+            assertThat(response.getHeaders().getContentDisposition().isInline()).isTrue();
+            assertThat(response.getHeaders().getContentDisposition().getFilename()).isEqualTo("test.png");
         }
 
         @Test
-        @DisplayName("파일명에 한글이 포함된 경우 URL 인코딩 처리")
-        void download_koreanFileName_encodedCorrectly() throws MalformedURLException {
+        @DisplayName("파일명에 한글이 포함된 경우 Content-Disposition 헤더에 올바르게 인코딩")
+        void download_koreanFileName_encodedCorrectly() {
             // given
             UUID contentId = UUID.randomUUID();
             BinaryContentDto metaData = new BinaryContentDto(
                 contentId, "테스트파일.png", 1024L, "image/png", BinaryContentStatus.SUCCESS
             );
 
-            URL presignedUrl = URI.create("https://s3.amazonaws.com/test-bucket/" + contentId).toURL();
-            PresignedGetObjectRequest presignedRequest = mockPresignedRequest(presignedUrl);
+            byte[] fileBytes = "fake image content".getBytes();
+            GetObjectResponse getObjectResponse = GetObjectResponse.builder().build();
+            ResponseInputStream<GetObjectResponse> responseStream =
+                new ResponseInputStream<>(getObjectResponse, new ByteArrayInputStream(fileBytes));
 
-            given(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class)))
-                .willReturn(presignedRequest);
+            given(s3Client.getObject(any(GetObjectRequest.class))).willReturn(responseStream);
 
             // when
-            ResponseEntity<Void> response = storage.download(metaData);
+            ResponseEntity<byte[]> response = storage.download(metaData);
 
             // then
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+            assertThat(response.getStatusCodeValue()).isEqualTo(200);
+            assertThat(response.getHeaders().getContentDisposition().getFilename()).isEqualTo("테스트파일.png");
         }
 
         @Test
-        @DisplayName("파일명에 공백이 포함된 경우 %20으로 인코딩")
-        void download_fileNameWithSpaces_encodedWithPercent20() throws MalformedURLException {
-            // given
-            UUID contentId = UUID.randomUUID();
-            BinaryContentDto metaData = new BinaryContentDto(
-                contentId, "my test file.png", 1024L, "image/png", BinaryContentStatus.SUCCESS
-            );
-
-            URL presignedUrl = URI.create("https://s3.amazonaws.com/test-bucket/" + contentId).toURL();
-            PresignedGetObjectRequest presignedRequest = mockPresignedRequest(presignedUrl);
-
-            given(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class)))
-                .willReturn(presignedRequest);
-
-            // when
-            ResponseEntity<Void> response = storage.download(metaData);
-
-            // then
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-        }
-
-        @Test
-        @DisplayName("Presigned URL 생성 실패 시 BinaryContentStorageException 발생")
-        void download_presignerError_throwsBinaryContentStorageException() {
+        @DisplayName("S3 다운로드 실패 시 BinaryContentStorageException 발생")
+        void download_s3Error_throwsBinaryContentStorageException() {
             // given
             UUID contentId = UUID.randomUUID();
             BinaryContentDto metaData = new BinaryContentDto(
@@ -246,17 +224,16 @@ class S3BinaryContentStorageTest {
             );
 
             AwsErrorDetails errorDetails = AwsErrorDetails.builder()
-                .errorCode("InvalidRequest")
-                .errorMessage("Invalid request")
+                .errorCode("NoSuchKey")
+                .errorMessage("The specified key does not exist")
                 .build();
 
             S3Exception s3Exception = (S3Exception) S3Exception.builder()
                 .awsErrorDetails(errorDetails)
-                .message("Failed to generate presigned URL")
+                .message("NoSuchKey")
                 .build();
 
-            given(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class)))
-                .willThrow(s3Exception);
+            given(s3Client.getObject(any(GetObjectRequest.class))).willThrow(s3Exception);
 
             // when & then
             assertThatThrownBy(() -> storage.download(metaData))
@@ -265,31 +242,27 @@ class S3BinaryContentStorageTest {
 
         @Test
         @DisplayName("다양한 컨텐츠 타입에 대해 정상 동작")
-        void download_variousContentTypes_worksCorrectly() throws MalformedURLException {
+        void download_variousContentTypes_worksCorrectly() {
             // given
             UUID contentId = UUID.randomUUID();
             BinaryContentDto pdfMetaData = new BinaryContentDto(
                 contentId, "document.pdf", 2048L, "application/pdf", BinaryContentStatus.SUCCESS
             );
 
-            URL presignedUrl = URI.create("https://s3.amazonaws.com/test-bucket/" + contentId).toURL();
-            PresignedGetObjectRequest presignedRequest = mockPresignedRequest(presignedUrl);
+            byte[] fileBytes = "fake pdf content".getBytes();
+            GetObjectResponse getObjectResponse = GetObjectResponse.builder().build();
+            ResponseInputStream<GetObjectResponse> responseStream =
+                new ResponseInputStream<>(getObjectResponse, new ByteArrayInputStream(fileBytes));
 
-            given(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class)))
-                .willReturn(presignedRequest);
+            given(s3Client.getObject(any(GetObjectRequest.class))).willReturn(responseStream);
 
             // when
-            ResponseEntity<Void> response = storage.download(pdfMetaData);
+            ResponseEntity<byte[]> response = storage.download(pdfMetaData);
 
             // then
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-        }
-
-        private PresignedGetObjectRequest mockPresignedRequest(URL url) {
-            PresignedGetObjectRequest presignedRequest =
-                org.mockito.Mockito.mock(PresignedGetObjectRequest.class);
-            given(presignedRequest.url()).willReturn(url);
-            return presignedRequest;
+            assertThat(response.getStatusCodeValue()).isEqualTo(200);
+            assertThat(response.getHeaders().getContentType())
+                .isEqualTo(MediaType.APPLICATION_PDF);
         }
     }
 }

@@ -5,21 +5,21 @@ import com.sprint.mission.discodeit.binarycontent.domain.exception.BinaryContent
 import com.sprint.mission.discodeit.binarycontent.presentation.dto.BinaryContentDto;
 import com.sprint.mission.discodeit.global.config.properties.S3Properties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.presigner.S3Presigner;
-import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
-import java.net.URLEncoder;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -27,20 +27,14 @@ import java.util.UUID;
 public class S3BinaryContentStorage implements BinaryContentStorage {
 
     private final String bucket;
-    private final Duration presignedUrlExpiration;
-
     private final S3Client s3Client;
-    private final S3Presigner s3Presigner;
 
     public S3BinaryContentStorage(
         S3Client s3Client,
-        S3Presigner s3Presigner,
         S3Properties s3Properties
     ) {
         this.s3Client = s3Client;
-        this.s3Presigner = s3Presigner;
         this.bucket = s3Properties.bucket();
-        this.presignedUrlExpiration = s3Properties.presignedUrlExpiration();
     }
 
     @Override
@@ -68,43 +62,39 @@ public class S3BinaryContentStorage implements BinaryContentStorage {
     }
 
     @Override
-    public ResponseEntity<Void> download(BinaryContentDto metaData) {
+    public ResponseEntity<byte[]> download(BinaryContentDto metaData) {
         String key = metaData.id().toString();
-        String presignedUrl = generatePresignedUrl(key, metaData.fileName(), metaData.contentType());
 
-        return ResponseEntity
-            .status(HttpStatus.FOUND)
-            .header(HttpHeaders.LOCATION, presignedUrl)
-            .build();
-    }
-
-    private String generatePresignedUrl(String key, String fileName, String contentType) {
-        log.debug("S3 Presigned URL 생성 시도: key={}", key);
+        log.debug("S3 파일 다운로드 시도: key={}", key);
 
         try {
-            String encodedFileName = URLEncoder.encode(fileName, StandardCharsets.UTF_8)
-                .replace("+", "%20");
-            String contentDisposition = "inline; filename*=UTF-8''" + encodedFileName;
-
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                .responseContentType(contentType)
-                .responseContentDisposition(contentDisposition)
                 .bucket(bucket)
                 .key(key)
                 .build();
 
-            GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
-                .signatureDuration(presignedUrlExpiration)
-                .getObjectRequest(getObjectRequest)
+            ResponseInputStream<GetObjectResponse> s3Object =
+                s3Client.getObject(getObjectRequest);
+            byte[] content = s3Object.readAllBytes();
+
+            ContentDisposition contentDisposition = ContentDisposition.inline()
+                .filename(metaData.fileName(), StandardCharsets.UTF_8)
                 .build();
 
-            String url = s3Presigner.presignGetObject(presignRequest).url().toString();
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentDisposition(contentDisposition);
+            headers.setContentType(MediaType.parseMediaType(metaData.contentType()));
+            headers.setContentLength(content.length);
 
-            log.info("S3 Presigned URL 생성 완료: key={}", key);
+            log.info("S3 파일 다운로드 완료: key={}, size={}", key, content.length);
 
-            return url;
+            return ResponseEntity.ok().headers(headers).body(content);
         } catch (S3Exception e) {
-            log.error("S3 Presigned URL 생성 실패: key={}", key, e);
+            log.error("S3 파일 다운로드 실패: key={}", key, e);
+
+            throw new BinaryContentStorageException(e);
+        } catch (IOException e) {
+            log.error("S3 파일 읽기 실패: key={}", key, e);
 
             throw new BinaryContentStorageException(e);
         }
